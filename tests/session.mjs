@@ -1101,15 +1101,40 @@ t('pen-only: turning pressure off gives a constant-width line', () => {
   resetInput();
   T.opts.pen.pressure = false;
   const page = E.pages[E.active];
+  /* Upright nib. This test used to lean the pen 70 degrees over while claiming
+     to check constant width, which only passed while Tilt was silently doing
+     nothing. With nothing to vary the width — no pressure, no lean — the ink is
+     still one stroked path. */
   const a = scr(200, 1700), b = scr(600, 1700);
-  down(220, 'pen', a.x, a.y, { pressure: 0.2, tiltX: 70 });
-  move(220, 'pen', b.x, b.y, { pressure: 0.9, tiltX: 70 });
-  up(220, 'pen', b.x, b.y, { pressure: 0.9, tiltX: 70 });
+  down(220, 'pen', a.x, a.y, { pressure: 0.2, tiltX: 0, tiltY: 0 });
+  move(220, 'pen', b.x, b.y, { pressure: 0.9, tiltX: 0, tiltY: 0 });
+  up(220, 'pen', b.x, b.y, { pressure: 0.9, tiltX: 0, tiltY: 0 });
   const s = page.items[page.items.length - 1];
   eq(s.pressure, false, 'flagged constant width');
   const c = mockCtx(mkEl('canvas'));
   E.drawItem(c, s, page);
   ok(c._rec.strokes >= 1, 'it still renders');
+  eq(c._rec.fills, 0, 'one stroked path, not the variable-width fill');
+  T.opts.pen.pressure = true;
+});
+
+t('tilt: a laid-over nib takes the variable-width path with pressure off', () => {
+  resetInput();
+  T.opts.pen.pressure = false; T.opts.pen.tilt = true;
+  const page = E.pages[E.active];
+  const a = scr(200, 1710), b = scr(600, 1710);
+  down(221, 'pen', a.x, a.y, { pressure: 0.5, tiltX: 70, tiltY: 0 });
+  move(221, 'pen', b.x, b.y, { pressure: 0.5, tiltX: 70, tiltY: 0 });
+  up(221, 'pen', b.x, b.y, { pressure: 0.5, tiltX: 70, tiltY: 0 });
+  const s = page.items[page.items.length - 1];
+  ok(s.pts.some(p => p.t > 1.4), 'the lean was recorded');
+  const c = mockCtx(mkEl('canvas'));
+  E.drawItem(c, s, page);
+  /* The whole point of the Tilt fix: the lean has to reach the renderer even
+     though Pressure is off, so this goes through the filled variable-width
+     path rather than being stroked at one flat width. */
+  eq(c._rec.strokes, 0, 'not a flat stroked line');
+  ok(c._rec.fills >= 1, 'filled at varying width');
   T.opts.pen.pressure = true;
 });
 
@@ -1485,9 +1510,35 @@ t('ink: the outline builder survives degenerate input', () => {
 });
 
 t('ink: pages are drawn from vectors at readable zoom, not from a soft cache', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'js', 'engine.js'), 'utf8');
-  ok(/const direct = E\.cam\.zoom >= 0\.5/.test(src), 'direct rendering kicks in early');
-  ok(/MAX_CACHE_PX = 13e6/.test(src), 'the cache is allowed retina resolution');
+  /* This used to grep engine.js for the exact text of the `direct` expression,
+     which broke the moment that decision was refactored — a test that pins the
+     wording rather than the behaviour. Ask the renderer instead: at a readable
+     zoom the page must be painted straight into the screen context, and only a
+     page that is tiny on screen may be blitted from a cached bitmap. */
+  const realCtx = E.ctx, realPaint = E.paintPage, realZoom = E.cam.zoom;
+  const renderAt = zoom => {
+    E.cam.zoom = zoom; E.clampCam();
+    const c = mockCtx(mkEl('canvas'));
+    let straightToScreen = 0;
+    E.ctx = c;
+    E.paintPage = function (ctx, ...rest) {
+      if (ctx === c) straightToScreen++;          // vectors, onto the screen
+      return realPaint.call(E, ctx, ...rest);     // (a cache paints into its own ctx)
+    };
+    try { E.render(); } finally { E.ctx = realCtx; E.paintPage = realPaint; }
+    return { straightToScreen, blits: c._rec.images };
+  };
+
+  const readable = renderAt(1);
+  ok(readable.straightToScreen >= 1, 'at 100% the ink is drawn from its vectors');
+
+  const tiny = renderAt(0.2);
+  eq(tiny.straightToScreen, 0, 'a thumbnail-sized page uses the cache');
+  ok(tiny.blits >= 1, 'and blits it');
+
+  E.cam.zoom = realZoom; E.clampCam();
+  ok(/MAX_CACHE_PX = 13e6/.test(fs.readFileSync(path.join(ROOT, 'js', 'engine.js'), 'utf8')),
+     'the cache is still allowed retina resolution');
 });
 
 /* ══════════ 24. export fidelity ══════════ */
