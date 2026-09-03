@@ -409,6 +409,8 @@
     const apply = () => {
       const h = bar.offsetHeight;
       if (h) screen.style.setProperty('--sub-h', h + 'px');
+      // fade the right edge only when something is actually out of view
+      if (bar.classList) bar.classList.toggle('can-scroll', bar.scrollWidth > bar.clientWidth + 2);
     };
     if (!subbarRO && typeof ResizeObserver !== 'undefined') {
       // rotation and window resizes change how much fits, so watch it too

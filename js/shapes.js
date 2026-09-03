@@ -123,6 +123,20 @@
       if (r) return r;
     }
     if (closed && corners.length === 3) {
+      /* Three surviving corners is not proof of a triangle. Sweep one corner of
+         a square — easy to do at speed — and only three are detected, and the
+         square came back as a triangle with a whole corner cut off. The ink
+         settles it: a triangle covers about half of its bounding box, a
+         rectangle very nearly all of it. So ask the traced loop how much of the
+         box it actually fills before believing the corner count. */
+      if (loopFill(ring, bb) > 0.72) {
+        const r = fitQuad([
+          { x: bb.x0, y: bb.y0 }, { x: bb.x1, y: bb.y0 },
+          { x: bb.x1, y: bb.y1 }, { x: bb.x0, y: bb.y1 }
+        ], opt);
+        if (r) return r;
+        return { kind: 'rect', x: bb.x0, y: bb.y0, w: bb.w, h: bb.h, rot: 0 };
+      }
       return { kind: 'poly', pts: corners.map(p => ({ x: p.x, y: p.y })), closed: true, sub: 'triangle' };
     }
     if (closed && corners.length >= 5 && corners.length <= 10) {
@@ -186,6 +200,20 @@
     const a1 = angleAt(shaft[0], tip, back);
     if (a1 > 1.15) return null;                       // barb must fold back
     return { kind: 'arrow', a: { x: simp[0].x, y: simp[0].y }, b: { x: tip.x, y: tip.y } };
+  }
+
+  /** How much of its own bounding box a closed loop encloses, 0..1.
+      Shoelace over the traced ring — a rectangle lands near 1, a triangle near
+      0.5, an ellipse near 0.79. */
+  function loopFill(ring, bb) {
+    const box = Math.abs(bb.w * bb.h);
+    if (!(box > 0) || !ring || ring.length < 3) return 0;
+    let a = 0;
+    for (let i = 0, n = ring.length; i < n; i++) {
+      const p = ring[i], q = ring[(i + 1) % n];
+      a += p.x * q.y - q.x * p.y;
+    }
+    return Math.abs(a / 2) / box;
   }
 
   /** dominant corners of a (possibly closed) simplified path, each with its angle */

@@ -237,11 +237,22 @@ button { font: inherit; font-family: var(--serif); color: inherit; background: n
    all. Wrapping costs a few pixels of canvas on a narrow screen and nothing on
    a wide one, and `.stage` is flex:1 with a ResizeObserver, so it hands the
    space straight back. */
+/* One row, always. Wrapping was tried and is worse: the pen's four checkboxes
+   dropped onto a second line and the bar ate a chunk of the page. So the row
+   scrolls instead — but it must never scroll *invisibly*, which was the
+   original complaint about the highlighter's options sitting off the right
+   edge with nothing to suggest they were there. `.can-scroll` is set from
+   ui.js only when the content genuinely overflows, and fades the right edge to
+   say so. A mask is measured against the padding box, so it stays put while
+   the content slides underneath it. */
 .subbar {
-  display: flex; align-items: center; gap: 8px 14px; min-height: var(--sub);
-  padding: 5px 14px;
+  display: flex; align-items: center; gap: 14px; min-height: var(--sub); padding: 0 14px;
   background: var(--bg); border-bottom: 1px solid var(--line);
-  overflow-y: hidden; scrollbar-width: none; flex-wrap: wrap;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex-wrap: nowrap;
+}
+.subbar.can-scroll {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
+          mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
 }
 .subbar::-webkit-scrollbar { display: none; }
 .subbar .grp { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }

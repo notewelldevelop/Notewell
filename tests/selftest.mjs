@@ -165,6 +165,44 @@ t('near-square rectangle snaps to a true square', () => {
   const s = NW.shapes.recognize(rectPts(0, 0, 200, 208));
   eq(s.kind, 'rect'); near(s.w, s.h, 1, 'square');
 });
+t('a square is never mistaken for a triangle', () => {
+  /* Three surviving corners used to be taken as proof of a triangle, so a
+     square with one corner swept round at speed came back with a whole corner
+     cut off. A triangle fills half its bounding box and a rectangle nearly all
+     of it, so the ink decides — not the corner count. */
+  const box = (x0, y0, x1, y1, per) => {
+    const c = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], out = [];
+    for (let e = 0; e < 4; e++) {
+      const a = c[e], b = c[(e + 1) % 4];
+      for (let i = 0; i < per; i++) {
+        const u = i / per;
+        out.push({ x: a[0] + (b[0] - a[0]) * u + (Math.random() - .5) * 4,
+                   y: a[1] + (b[1] - a[1]) * u + (Math.random() - .5) * 4 });
+      }
+    }
+    return out;
+  };
+  for (let trial = 0; trial < 8; trial++) {
+    const s2 = NW.shapes.recognize(box(100, 100, 300, 300, 26), { smoothFallback: false });
+    ok(s2 && s2.sub !== 'triangle', 'a square did not become a triangle (' + (s2 && (s2.sub || s2.kind)) + ')');
+  }
+});
+
+t('a real triangle is still a triangle', () => {
+  const c = [[100, 300], [300, 300], [200, 120]], pts = [];
+  for (let e = 0; e < 3; e++) {
+    const a = c[e], b = c[(e + 1) % 3];
+    for (let i = 0; i < 30; i++) {
+      const u = i / 30;
+      pts.push({ x: a[0] + (b[0] - a[0]) * u + (Math.random() - .5) * 4,
+                 y: a[1] + (b[1] - a[1]) * u + (Math.random() - .5) * 4 });
+    }
+  }
+  const s2 = NW.shapes.recognize(pts, { smoothFallback: false });
+  eq(s2.sub, 'triangle', 'still recognised');
+  eq(s2.pts.length, 3, 'with three corners');
+});
+
 t('rough line → line', () => {
   const s = NW.shapes.recognize(linePts(10, 10, 300, 40));
   eq(s.kind, 'line');
