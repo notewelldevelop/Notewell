@@ -1,0 +1,55 @@
+# Run the whole test suite on every push and every pull request.
+#
+# deploy.yml already runs the two node suites before it publishes, so `main` is
+# never deployed broken. This is the wider net: it also covers pull requests,
+# and it runs the two python verifiers, which nothing in CI was running at all.
+# CLAUDE.md asks for all four before a release — this is that, enforced.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Only the QR verifier needs anything; it decodes the codes it generates
+      # with a real scanner rather than trusting the encoder.
+      - name: Install the QR decoder
+        run: python -m pip install --quiet opencv-python-headless numpy
+
+      # Pure logic: geometry, shapes, scribble detection, PDF, ZIP, QR.
+      - name: Unit tests
+        run: node tests/selftest.mjs
+
+      # The whole app in a mock DOM, driven by fake stylus events. This is where
+      # dropped-stroke bugs get caught — if ink ever vanishes again, it gets
+      # reproduced here first.
+      - name: Session tests
+        run: node tests/session.mjs
+
+      # Proves the ink outline has no holes: every subpath must wind the same
+      # way, or the nonzero fill rule bites crescents out of the letters.
+      - name: Ink winding
+        run: python3 tests/winding.py
+
+      # Proves the install-screen QR codes actually scan.
+      - name: QR codes decode
+        run: python3 tests/qr-decode.py

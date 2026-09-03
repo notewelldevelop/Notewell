@@ -1,0 +1,31 @@
+{
+  "appId": "app.notewell",
+  "appName": "NoteWell",
+  "webDir": ".",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "capacitor"
+  },
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false,
+    "limitsNavigationsToAppBoundDomains": false,
+    "preferredContentMode": "mobile",
+    "backgroundColor": "#14161aff"
+  },
+  "android": {
+    "backgroundColor": "#14161aff",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "NoteWellPencil": {},
+    "SplashScreen": {
+      "launchShowDuration": 400,
+      "backgroundColor": "#14161a",
+      "showSpinner": false
+    }
+  }
+}

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff" id="metaTheme">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="NoteWell">
+<title>NoteWell</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<script>
+  /* set the theme before first paint so there is never a flash of the wrong one */
+  try {
+    var m = localStorage.getItem('nw-theme');
+    if (m === 'light' || m === 'dark') document.documentElement.setAttribute('data-theme', m);
+  } catch (e) {}
+</script>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ══════════════════════════ LIBRARY (file system) ══════════════════════════ -->
+<div id="library" class="screen">
+  <header class="lib-head">
+    <div class="brand">
+      <span class="mark">NW</span>
+      <span>NoteWell</span>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="spacer"></div>
+    <input id="libSearch" class="lib-search" type="search" placeholder="Search notebooks…">
+    <button class="btn" id="btnNewFolder" title="New folder">
+      <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5" class="ln"/></svg>
+      <span>Folder</span>
+    </button>
+    <button class="btn" id="btnImportPdf" title="Import a PDF as an annotatable notebook">
+      <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M9 14l3 3 3-3" class="ln"/></svg>
+      <span>Import PDF</span>
+    </button>
+    <button class="btn primary" id="btnNewNotebook">
+      <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M12 9v7M8.5 12.5h7" class="ln"/></svg>
+      <span>New notebook</span>
+    </button>
+    <button class="btn" id="btnInstall" title="Put NoteWell on this device">
+      <svg viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5" class="ln"/><path d="M10.5 19h3" class="ln"/><path d="M12 7v6M9.4 10.4L12 13l2.6-2.6" class="ln"/></svg>
+      <span>Install</span>
+    </button>
+    <button class="btn icon theme-btn" id="btnTheme" title="Light / dark">
+      <svg viewBox="0 0 24 24" class="i-sun"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>
+      <svg viewBox="0 0 24 24" class="i-moon" hidden><path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg>
+    </button>
+    <button class="btn icon" id="btnAccount" title="Account &amp; sync">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+    </button>
+    <button class="btn icon" id="btnLibSettings" title="Settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+    </button>
+  </header>
+
+  <div class="lib-body" id="libBody">
+    <div class="lib-empty" id="libEmpty" hidden>
+      <svg viewBox="0 0 24 24" class="big"><path d="M5 3h11l3 3v15H5z"/><path d="M8 9h8M8 13h8M8 17h5" class="ln"/></svg>
+      <h2>Your shelf is empty</h2>
+      <p>Create a notebook, make a folder, or drop a PDF anywhere on this page.</p>
+    </div>
+    <div class="grid" id="libGrid"></div>
+  </div>
+
+  <footer class="lib-foot">
+    <span id="libStat"></span>
+    <span class="spacer"></span>
+    <button class="link" id="btnExportFolder">Export this folder…</button>
+    <button class="link" id="btnBackup">Backup / restore</button>
+    <span class="net" id="netBadge">Offline‑ready</span>
+  </footer>
+</div>
+
+<!-- ══════════════════════════ EDITOR ══════════════════════════ -->
+<div id="editor" class="screen" hidden>
+
+  <!-- Requirement 13: every function is a small icon along the top -->
+  <header class="bar" id="toolbar">
+    <button class="tb" id="btnBack" title="Back to library">
+      <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" class="ln"/></svg>
+    </button>
+    <div class="doc-title" id="docTitle" contenteditable="true" spellcheck="false">Untitled</div>
+
+    <span class="sep"></span>
+    <button class="tb" id="btnUndo" title="Undo (⌘Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5" class="ln"/><path d="M4 12h9a6 6 0 1 1 0 12h-2" class="ln"/></svg></button>
+    <button class="tb" id="btnRedo" title="Redo (⇧⌘Z)"><svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5" class="ln"/><path d="M20 12h-9a6 6 0 1 0 0 12h2" class="ln"/></svg></button>
+
+    <span class="sep"></span>
+    <!-- tools -->
+    <button class="tb tool" data-tool="pen" title="Pen (1)">
+      <svg viewBox="0 0 24 24"><path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z" class="ln"/><path d="M15 6l3 3" class="ln"/></svg>
+    </button>
+    <button class="tb tool" data-tool="highlighter" title="Highlighter (2) — tints, never covers">
+      <svg viewBox="0 0 24 24"><path d="M6 15l6-9a2 2 0 0 1 3.4 0l1.6 2.6a2 2 0 0 1-.4 2.6L10 17z" class="ln"/><path d="M4 20h9" class="ln hl"/></svg>
+    </button>
+    <button class="tb tool" data-tool="eraser" title="Eraser (3) — double‑tap Pencil to toggle">
+      <svg viewBox="0 0 24 24"><path d="M8 19l-4-4 9-9 4 4-9 9z" class="ln"/><path d="M6 19h12" class="ln"/></svg>
+    </button>
+    <button class="tb tool" data-tool="lasso" title="Lasso (4) — circle work, then drag it anywhere">
+      <svg viewBox="0 0 24 24"><ellipse cx="12" cy="9.5" rx="7" ry="5" class="ln dash"/><path d="M9 14.2c0 3 1 4.3 3 4.8" class="ln"/></svg>
+    </button>
+    <button class="tb tool" data-tool="shape" title="Shapes (5) — draw roughly, it snaps">
+      <svg viewBox="0 0 24 24"><rect x="3.5" y="10.5" width="9" height="9" rx="1" class="ln"/><circle cx="16" cy="8" r="4.5" class="ln"/></svg>
+    </button>
+    <button class="tb tool" data-tool="fill" title="Paint bucket (6)">
+      <svg viewBox="0 0 24 24"><path d="M6 11l6-6 7 7-6 6a2 2 0 0 1-2.8 0L6 13.8A2 2 0 0 1 6 11z" class="ln"/><path d="M9 8L7 6" class="ln"/><path d="M20 15c1.2 1.7 1.8 2.8 1.8 3.4a1.8 1.8 0 1 1-3.6 0c0-.6.6-1.7 1.8-3.4z"/></svg>
+    </button>
+    <button class="tb tool" data-tool="text" title="Text (7)">
+      <svg viewBox="0 0 24 24"><path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" class="ln"/></svg>
+    </button>
+    <button class="tb" id="btnImage" title="Insert image (8)">
+      <svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2" class="ln"/><circle cx="9" cy="10" r="1.6" class="ln"/><path d="M4.5 16.5l4.5-4 3.5 3 3-2.5 4 3.5" class="ln"/></svg>
+    </button>
+    <button class="tb tool" data-tool="hand" title="Pan / read (9)">
+      <svg viewBox="0 0 24 24"><path d="M8 11V5.6a1.6 1.6 0 1 1 3.2 0V11m0-.6V4.6a1.6 1.6 0 1 1 3.2 0v6m0-.4V6.4a1.6 1.6 0 1 1 3.2 0V14a6 6 0 0 1-6 6h-1a5 5 0 0 1-4.2-2.3L4.6 14a1.6 1.6 0 0 1 2.5-2L8 13.2" class="ln"/></svg>
+    </button>
+
+    <span class="sep"></span>
+    <button class="tb" id="btnPages" title="Page thumbnails">
+      <svg viewBox="0 0 24 24"><rect x="4" y="3.5" width="7" height="8" rx="1" class="ln"/><rect x="13" y="3.5" width="7" height="8" rx="1" class="ln"/><rect x="4" y="13.5" width="7" height="7" rx="1" class="ln"/><rect x="13" y="13.5" width="7" height="7" rx="1" class="ln"/></svg>
+    </button>
+    <button class="tb" id="btnAddPage" title="Add page — or just pull past the bottom and hold">
+      <svg viewBox="0 0 24 24"><path d="M6 3.5h8l4 4v13H6z" class="ln"/><path d="M12 10v7M8.5 13.5h7" class="ln"/></svg>
+    </button>
+    <button class="tb" id="btnExport" title="Export / share">
+      <svg viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4" class="ln"/><path d="M4 15v3.5a1.5 1.5 0 0 0 1.5 1.5h13a1.5 1.5 0 0 0 1.5-1.5V15" class="ln"/></svg>
+    </button>
+
+    <span class="spacer"></span>
+    <button class="tb sync-chip" id="syncChip" title="Save to your account">
+      <span class="dot"></span><span class="lbl" id="syncLabel">Saved</span>
+    </button>
+    <button class="tb accent" id="btnAI" title="Ask the assistant (⌘K)">
+      <svg viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.4L12 15l-1.9-4.6L5.5 9l4.6-1.4z" class="ln"/><path d="M18 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" class="ln"/></svg>
+      <span class="lbl">Assistant</span>
+    </button>
+    <button class="tb theme-btn" id="btnTheme2" title="Light / dark">
+      <svg viewBox="0 0 24 24" class="i-sun"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg>
+      <svg viewBox="0 0 24 24" class="i-moon" hidden><path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg>
+    </button>
+    <button class="tb" id="btnZoomOut" title="Zoom out"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" class="ln"/><path d="M8 11h6M20 20l-4.4-4.4" class="ln"/></svg></button>
+    <button class="tb zoomval" id="btnZoomReset" title="Reset zoom">100%</button>
+    <button class="tb" id="btnZoomIn" title="Zoom in"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" class="ln"/><path d="M8 11h6M11 8v6M20 20l-4.4-4.4" class="ln"/></svg></button>
+  </header>
+
+  <!-- contextual second row: colours, sizes, per-tool options -->
+  <div class="subbar" id="subbar"></div>
+
+  <!-- canvas stage -->
+  <div class="stage" id="stage">
+    <canvas id="paper"></canvas>
+    <canvas id="live"></canvas>
+    <div id="overlay"></div>
+    <div class="page-hint" id="pageHint"><div class="ring"><svg viewBox="0 0 36 36"><circle class="trk" cx="18" cy="18" r="15"/><circle class="prg" cx="18" cy="18" r="15"/></svg></div><span>Keep pulling to add a page</span></div>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <!-- selection action bubble (lasso) -->
+  <div class="selbar" id="selbar" hidden>
+    <button data-act="cut" title="Cut"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.6" class="ln"/><circle cx="18" cy="18" r="2.6" class="ln"/><path d="M8 16L18 4M16 16L6 4" class="ln"/></svg></button>
+    <button data-act="copy" title="Duplicate"><svg viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2" class="ln"/><path d="M15.5 5.5h-11v11" class="ln"/></svg></button>
+    <button data-act="color" title="Recolour"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" class="ln"/><path d="M12 4.5A7.5 7.5 0 0 1 12 19.5" /></svg></button>
+    <button data-act="scale" title="Resize"><svg viewBox="0 0 24 24"><path d="M4 10V4h6M20 14v6h-6" class="ln"/><path d="M4 4l7 7M20 20l-7-7" class="ln"/></svg></button>
+    <button data-act="back" title="Send to back"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="11" height="11" rx="2" class="ln dash"/><rect x="9" y="9" width="11" height="11" rx="2" class="ln"/></svg></button>
+    <button data-act="front" title="Bring to front"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" class="ln dash"/><rect x="4" y="4" width="11" height="11" rx="2" class="ln"/></svg></button>
+    <button data-act="delete" title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13" class="ln"/></svg></button>
+  </div>
+
+  <!-- page thumbnail rail -->
+  <aside class="pages" id="pagesPanel" hidden>
+    <div class="ph"><b>Pages</b><button class="x" id="closePages">×</button></div>
+    <div class="thumbs" id="thumbs"></div>
+    <button class="btn wide" id="btnAddPage2">Add page…</button>
+  </aside>
+
+  <!-- Claude assistant -->
+  <aside class="ai" id="aiPanel" hidden>
+    <div class="ph">
+      <span class="ai-mark">NW</span>
+      <b>Assistant<span class="engine" id="aiEngine"></span></b>
+      <select id="aiMode" title="What the assistant looks at">
+        <option value="page">This page</option>
+        <option value="selection">My selection</option>
+        <option value="notebook">Whole notebook</option>
+        <option value="none">Just chat</option>
+      </select>
+      <button class="x" id="closeAI">×</button>
+    </div>
+    <div class="chat" id="chat"></div>
+    <div class="quick">
+      <button data-q="Solve the question on this page. Show every step clearly.">Solve it</button>
+      <button data-q="Check my working and point out any mistakes, kindly and specifically.">Check my work</button>
+      <button data-q="Explain this page like I'm seeing it for the first time.">Explain</button>
+      <button data-q="Turn this page into concise revision flashcards (Q → A).">Flashcards</button>
+      <button data-q="Summarise the key points of this page in bullet form.">Summarise</button>
+    </div>
+    <div class="composer">
+      <textarea id="aiInput" rows="1" placeholder="Ask about this page…"></textarea>
+      <button id="aiSend" title="Send">
+        <svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z" class="ln"/></svg>
+      </button>
+    </div>
+  </aside>
+</div>
+
+<!-- ══════════════════════════ MODALS ══════════════════════════ -->
+<div class="modal-root" id="modalRoot" hidden><div class="scrim"></div><div class="modal" id="modalBox"></div></div>
+<input type="file" id="filePick" hidden>
+<div class="drop-veil" id="dropVeil" hidden><div>Drop PDFs or images to import</div></div>
+
+<script src="js/util.js"></script>
+<script src="js/qr.js"></script>
+<script src="js/templates.js"></script>
+<script src="js/shapes.js"></script>
+<script src="js/store.js"></script>
+<script src="js/pdfwriter.js"></script>
+<script src="js/zipwriter.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/text.js"></script>
+<script src="js/tools.js"></script>
+<script src="js/pdfimport.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/backup.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/install.js"></script>
+<script src="js/updates.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

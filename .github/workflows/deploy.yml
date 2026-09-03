@@ -1,0 +1,66 @@
+# Build NoteWell and publish it to GitHub Pages on every push.
+#
+# Only needed if you keep the *source* in the repo rather than the built files.
+# With this in place, shipping an update to everyone is one `git push`.
+#
+# Turn it on: repo → Settings → Pages → Source: GitHub Actions.
+
+name: Publish NoteWell
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # lets you republish by hand from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # optional: bundle real Garamond and the PDF reader so the published
+      # app never needs to fetch anything. Failures here are not fatal.
+      - name: Fetch optional extras
+        continue-on-error: true
+        run: |
+          node setup/fetch-fonts.js || true
+          node setup/fetch-vendor.js || true
+
+      - name: Check nothing is broken
+        run: |
+          node tests/selftest.mjs
+          node tests/session.mjs
+
+      - name: Build the web bundle
+        env:
+          NOTEWELL_NOTES: ${{ github.event.head_commit.message }}
+        run: node setup/build-web.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

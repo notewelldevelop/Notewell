@@ -1,0 +1,36 @@
+# Normalise line endings on the way into the repo, so a checkout on Windows and
+# a checkout on a Mac produce byte-identical builds.
+* text=auto eol=lf
+
+# The two launchers are the exception, and getting them wrong is a real bug.
+# cmd.exe mis-parses a .bat with bare LF endings — a label or a multi-line block
+# silently does the wrong thing — so this one is CRLF wherever it is checked out.
+*.bat           text eol=crlf
+# …and the macOS/Linux launcher must stay LF, or the shell reads the \r as part
+# of the command and reports "command not found".
+*.command       text eol=lf
+*.sh            text eol=lf
+
+# Never touched, never diffed.
+*.png           binary
+*.jpg           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.otf           binary
+*.pdf           binary
+*.zip           binary
+
+# Diffing helpers.
+*.js            diff=javascript
+*.py            diff=python
+*.html          diff=html
+*.md            diff=markdown
+
+# GitHub's language stats: don't let fetched fonts, downloaded libraries or a
+# stray build dominate what the repo says it is written in.
+vendor/**       linguist-vendored
+fonts/**        linguist-vendored
+dist-web/**     linguist-generated
+icons/**        linguist-documentation

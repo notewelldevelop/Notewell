@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#ffffff"/>
+  <text x="256" y="256" fill="#0d0d0d" text-anchor="middle" dominant-baseline="central"
+        font-size="250" letter-spacing="-30"
+        font-family="Garamond, 'EB Garamond', 'Adobe Garamond Pro', 'Apple Garamond', Baskerville, 'Iowan Old Style', Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif">NW</text>
+</svg>
