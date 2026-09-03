@@ -56,7 +56,10 @@
     mode: null,           // draw | pan | pinch | move | scale | erase | lasso
     draw: null,
     gesture: null,
-    pull: { active: false, t0: 0, prog: 0, raf: 0 }
+    pull: { active: false, t0: 0, prog: 0, raf: 0 },
+    /* Terminating events we are still owed by strokes that were taken over
+       before they ended. See owedLift(). */
+    owed: 0
   };
   T._p = P;               // exposed for the test suite
 
@@ -259,6 +262,40 @@
     return ts < P.claimedAt - 1;
   }
 
+  /**
+   * The same straggler, recognised without looking at the clock.
+   *
+   * `staleLift` needs a usable `ev.timeStamp`, and when one is missing every
+   * guard here silently opens: the previous stroke's lift lands on the stroke
+   * that replaced it and ends it where it stands. The stroke is still
+   * committed, so nothing looks lost by count — it is committed as a single
+   * point. That is why an H kept its first upright and put a full stop where
+   * the second should be, and why the stem of an i never appeared.
+   *
+   * So count instead. If a new pen-down arrives while a stroke is still live,
+   * that stroke's terminating event has not been delivered yet and is still
+   * coming; the next one for this pointer belongs to it, not to the stroke now
+   * being drawn. If it never arrives, the worst case is that the *next*
+   * pen-down commits this stroke in full — late, but whole.
+   */
+  /** Is this event arriving from somewhere this pointer is not? */
+  function farFromLiveStroke(ev) {
+    const rec = P.pointers.get(ev.pointerId);
+    if (!rec) return false;
+    const pt = local(ev);
+    return Math.hypot(pt.x - rec.x, pt.y - rec.y) > 30;   // screen px
+  }
+
+  function straggler(ev) {
+    if (staleLift(ev)) { if (P.owed) P.owed--; return true; }
+    /* No usable clock. A pointer cannot teleport: an event that lands well
+       away from where the live stroke actually is belongs to the press before
+       it. The lift of a stroke that is genuinely ending arrives where the nib
+       already is, so this cannot swallow one. */
+    if (P.owed && farFromLiveStroke(ev)) { P.owed--; return true; }
+    return false;
+  }
+
   /** A pen has arrived while fingers were moving the page — the pen wins. */
   function cancelGesture() {
     if (P.mode === 'pan' || P.mode === 'pinch') { P.mode = null; P.gesture = null; }
@@ -302,7 +339,7 @@
        have discarded the whole of the next stroke. `pointerdown` fires once per
        press, so there is no such thing as a repeat to protect against; and a
        stroke with nothing drawn in it yet commits nothing anyway. */
-    if (P.penId != null) recoverStalePointer();
+    if (P.penId != null) { P.owed = Math.min(P.owed + 1, 2); recoverStalePointer(); }
     cancelGesture();                                        // pen beats fingers
     claimDraw(ev);
 
@@ -392,7 +429,7 @@
   function onUp(ev) {
     /* A lift left over from the previous stroke, arriving on a recycled id
        after the next stroke has already started. Leave the new stroke alone. */
-    if (P.penId != null && ev.pointerId === P.penId && staleLift(ev)) return;
+    if (P.penId != null && ev.pointerId === P.penId && straggler(ev)) return;
 
     const rec = P.pointers.get(ev.pointerId);
     P.pointers.delete(ev.pointerId);
@@ -413,7 +450,7 @@
   /** The system took the pointer away (a call came in, iPadOS switched apps).
       Commit what was drawn rather than throwing the student's ink away. */
   function onCancel(ev) {
-    if (P.penId != null && ev.pointerId === P.penId && staleLift(ev)) return;
+    if (P.penId != null && ev.pointerId === P.penId && straggler(ev)) return;
     const rec = P.pointers.get(ev.pointerId);
     P.pointers.delete(ev.pointerId);
     if (P.penId != null && ev.pointerId === P.penId) { finishDraw(ev, rec); return; }
@@ -424,7 +461,7 @@
       With pointer capture this rarely fires for the drawing pointer, but if it
       does the stroke is committed, not lost. */
   function onLeave(ev) {
-    if (P.penId != null && ev.pointerId === P.penId && staleLift(ev)) return;
+    if (P.penId != null && ev.pointerId === P.penId && straggler(ev)) return;
     if (P.penId != null && ev.pointerId === P.penId) {
       const rec = P.pointers.get(ev.pointerId);
       P.pointers.delete(ev.pointerId);
@@ -447,7 +484,7 @@
        same id, and only then does A's queued loss arrive. Without this guard it
        matches B's id, finds a live stroke, and ends B a millisecond after it
        started. The event carries A's timestamp, so it is recognisable. */
-    if (staleLift(ev)) return;
+    if (straggler(ev)) return;
     if (!P.mode) { releaseDraw(); return; }
     const rec = P.pointers.get(ev.pointerId);
     P.pointers.delete(ev.pointerId);
@@ -626,6 +663,11 @@
     if (sh && sh.kind !== 'curve') {
       d.snapped = sh;
       d.handle = nearestHandle(sh, d.pts[d.pts.length - 1]);
+      // remember the corner that must not move, before any dragging alters it
+      if (sh.kind === 'rect' || sh.kind === 'ellipse') {
+        const hs = shapeHandles(sh)[(d.handle + 2) % 4];
+        d.anchor = hs ? { x: hs.x, y: hs.y } : null;
+      }
       drawLive();
       if (navigator.vibrate) try { navigator.vibrate(6); } catch { }
     }
@@ -660,7 +702,7 @@
   }
 
   /** Move one handle to `pt`; everything else about the shape holds still. */
-  function dragHandle(sh, i, pt) {
+  function dragHandle(sh, i, pt, fixedAnchor) {
     switch (sh.kind) {
       case 'line': case 'arrow':
         if (i === 0) sh.a = { x: pt.x, y: pt.y }; else sh.b = { x: pt.x, y: pt.y };
@@ -674,7 +716,12 @@
            means everywhere else in the app. Measured along the shape's own
            axes so a rotated box stays rotated. */
         const rot = sh.rot || 0;
-        const anchor = shapeHandles(sh)[(i + 2) % 4];
+        /* The anchor is pinned once, when the shape snaps, and never
+           recomputed. Taking corner (i+2)%4 of the *current* box looked right
+           until the drag pulled the box past its own anchor: the corners
+           reorder, the anchor jumps to a different one, and the whole shape
+           walks across the page instead of resizing about a fixed point. */
+        const anchor = fixedAnchor || shapeHandles(sh)[(i + 2) % 4];
         if (!anchor) return;
         const c = Math.cos(rot), sn = Math.sin(rot);
         const dx = pt.x - anchor.x, dy = pt.y - anchor.y;
@@ -694,7 +741,7 @@
     const d = P.draw; if (!d || !d.snapped) return;
     const L = E.layout[d.pageIndex]; if (!L) return;
     const pt = local(ev), w = E.toWorld(pt.x, pt.y);
-    dragHandle(d.snapped, d.handle || 0, { x: w.x - L.x, y: w.y - L.y });
+    dragHandle(d.snapped, d.handle || 0, { x: w.x - L.x, y: w.y - L.y }, d.anchor);
     d.adjusted = true;
     drawLive();
   }

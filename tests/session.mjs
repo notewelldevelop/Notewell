@@ -1049,6 +1049,49 @@ t('pen-only: losing pointer capture mid-stroke is caught', () => {
   eq(T._p.penId, null);
 });
 
+t('fast writing: a straggler cannot truncate the stroke that replaced it', () => {
+  /* The failure this catches is not a lost stroke — it is a *stub*. When the
+     previous press's lift lands on the stroke that replaced it, that stroke is
+     still committed, so the item count looks right; it is committed as a single
+     point. An H kept its first upright and put a full stop where the second
+     should be, and the stem of an i never appeared. Counting items missed it
+     for weeks, so this measures what actually reached the page.
+
+     No timeStamp is supplied on purpose. Every guard that reads the clock is
+     open in that case, which is the state the real device was in. */
+  const cases = ['pointerup', 'lostpointercapture', 'pointerleave', 'pointercancel'];
+  for (const late of cases) {
+    for (const when of ['afterDown', 'afterMove']) {
+      resetInput();
+      T.setTool('pen'); T.penSeen = true;
+      const page = E.pages[E.active];
+      const n0 = page.items.length;
+      const a0 = scr(200, 1400), a1 = scr(200, 1500);
+      const b0 = scr(260, 1400), b1 = scr(260, 1500);
+      const fireBare = (type, p) => stage.dispatch(type, ev(type, p.x, p.y, { id: 77, pointerType: 'pen' }));
+
+      fireBare('pointerdown', a0);
+      fireBare('pointermove', { x: a0.x, y: a0.y + 30 });
+      fireBare('pointermove', a1);
+      // the first stem's lift has not been delivered yet
+      fireBare('pointerdown', b0);
+      if (when === 'afterDown') fireBare(late, a1);
+      fireBare('pointermove', { x: b0.x, y: b0.y + 30 });
+      if (when === 'afterMove') fireBare(late, a1);
+      fireBare('pointermove', b1);
+      fireBare('pointerup', b1);
+
+      const made = page.items.slice(n0);
+      eq(made.length, 2, late + '/' + when + ': both stems reached the page');
+      for (const it of made) {
+        let lo = Infinity, hi = -Infinity;
+        for (const p of it.pts) { if (p.y < lo) lo = p.y; if (p.y > hi) hi = p.y; }
+        ok(hi - lo > 60, late + '/' + when + ': a full stem, not a stub (span ' + Math.round(hi - lo) + ')');
+      }
+    }
+  }
+});
+
 t('fast writing: a stale capture-loss cannot kill the stroke that replaced it', () => {
   resetInput();
   T.setTool('pen');
@@ -2021,6 +2064,41 @@ t('shape tool: dragging after the snap moves one handle and pins the rest', () =
   up(411, 'pen', target.x, target.y);
   eq(page.items.length, n + 1, 'one shape committed');
   eq(page.items[page.items.length - 1].type, 'shape', 'as a shape');
+  T.setTool('pen');
+});
+
+t('shape tool: the far corner stays put even when the drag crosses it', () => {
+  resetInput();
+  T.setTool('shape');
+  T.opts.shape.kind = 'rect';
+  const path = [];
+  for (let i = 0; i <= 8; i++) path.push({ x: 200 + i * 20, y: 1400 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 360, y: 1400 + i * 14 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 360 - i * 20, y: 1512 });
+  const scr0 = pathOnPage(path);
+  down(440, 'pen', scr0[0].x, scr0[0].y);
+  for (let i = 1; i < scr0.length; i++) move(440, 'pen', scr0[i].x, scr0[i].y);
+  T._p.draw.lastMoveT = performance.now() - 600;
+  const tail = scr0[scr0.length - 1];
+  move(440, 'pen', tail.x + 0.01, tail.y);
+
+  const d = T._p.draw;
+  ok(d && d.snapped, 'snapped');
+  const before = T._shapeHandles(d.snapped).map(h => ({ x: h.x, y: h.y }));
+  const grabbed = d.handle || 0;
+  const fixed = before[(grabbed + 2) % 4];
+
+  /* Drag right past the anchor and out the other side. The corner opposite the
+     nib must not shift by so much as a unit — recomputing it each move let the
+     corners reorder as the box inverted, and the shape walked off. */
+  for (const target of [scr(300, 1450), scr(180, 1380), scr(120, 1300)]) {
+    move(440, 'pen', target.x, target.y);
+    const now = T._shapeHandles(d.snapped);
+    const still = now.some(h => Math.hypot(h.x - fixed.x, h.y - fixed.y) < 1);
+    ok(still, 'the far corner is still where it was');
+  }
+  up(440, 'pen', scr(120, 1300).x, scr(120, 1300).y);
+  T.opts.shape.kind = 'auto';
   T.setTool('pen');
 });
 
