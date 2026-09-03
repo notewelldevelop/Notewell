@@ -348,6 +348,8 @@
       P.lastMoveAt = performance.now();
       switch (P.mode) {
         case 'draw': {
+          // already snapped? the pen is now adjusting the shape, not drawing
+          if (P.draw && P.draw.snapped) { dragSnapped(ev); break; }
           // coalesced events give buttery pen lines on iPad — every sample the
           // Pencil produced between frames, not just the last one
           const evs = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [ev];
@@ -597,19 +599,104 @@
   }
 
   /** "draw it, then hold still" → snap to a shape, like GoodNotes */
+  /* ── hold to snap, then drag to adjust ─────────────
+     The model the tablet apps have converged on — GoodNotes, Notability and
+     Freeform all behave this way: draw, pause *without lifting* and the stroke
+     snaps to the shape it recognised, then, still holding, drag to adjust it.
+     The handle nearest where you paused follows the nib and every other one
+     stays exactly where it is, so a triangle keeps two corners and moves the
+     third. Lifting commits the adjusted shape. OneNote is the odd one out — it
+     converts only after you lift and gives you nothing to adjust, which is the
+     version people complain about, so it is not what we copy.
+
+     For the pen this still sits behind `holdToSnap`, because a gesture that
+     reinterprets writing has to be asked for. The shape tool is exempt: asking
+     for a shape *is* the opt-in. */
   function maybeHoldSnap() {
     const d = P.draw;
-    if (!d || d.tool === 'highlighter' || !T.settings.holdToSnap) return;
-    if (d.tool === 'shape') return;                     // shape tool snaps on release anyway
+    if (!d || d.tool === 'highlighter') return;
+    if (d.tool !== 'shape' && !T.settings.holdToSnap) return;
     if (d.pts.length < 6) return;
     if (performance.now() - d.lastMoveT < 480) return;
     if (d.snapped) return;
-    const sh = NW.shapes.recognize(d.pts, { smoothFallback: false });
+    const forced = d.tool === 'shape' ? T.opts.shape.kind : 'auto';
+    const sh = forced === 'auto'
+      ? NW.shapes.recognize(d.pts, { smoothFallback: false, forceRegular: d.tool === 'shape' && T.opts.shape.regular })
+      : forceShape(forced, d.pts, T.opts.shape.regular);
     if (sh && sh.kind !== 'curve') {
       d.snapped = sh;
+      d.handle = nearestHandle(sh, d.pts[d.pts.length - 1]);
       drawLive();
       if (navigator.vibrate) try { navigator.vibrate(6); } catch { }
     }
+  }
+
+  /** the draggable points of a snapped shape, in page units */
+  function boxCorners(cx, cy, hw, hh, rot) {
+    const c = Math.cos(rot), s = Math.sin(rot);
+    return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
+      .map(([dx, dy]) => ({ x: cx + dx * c - dy * s, y: cy + dx * s + dy * c }));
+  }
+  function shapeHandles(sh) {
+    if (!sh) return [];
+    switch (sh.kind) {
+      case 'line': case 'arrow': return [sh.a, sh.b];
+      case 'poly': case 'curve': return sh.pts || [];
+      case 'rect': return boxCorners(sh.x + sh.w / 2, sh.y + sh.h / 2, sh.w / 2, sh.h / 2, sh.rot || 0);
+      case 'ellipse': return boxCorners(sh.cx, sh.cy, Math.abs(sh.rx), Math.abs(sh.ry), sh.rot || 0);
+    }
+    return [];
+  }
+  T._shapeHandles = shapeHandles;
+
+  function nearestHandle(sh, pt) {
+    const hs = shapeHandles(sh);
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < hs.length; i++) {
+      const dx = hs[i].x - pt.x, dy = hs[i].y - pt.y, d2 = dx * dx + dy * dy;
+      if (d2 < bd) { bd = d2; best = i; }
+    }
+    return best;
+  }
+
+  /** Move one handle to `pt`; everything else about the shape holds still. */
+  function dragHandle(sh, i, pt) {
+    switch (sh.kind) {
+      case 'line': case 'arrow':
+        if (i === 0) sh.a = { x: pt.x, y: pt.y }; else sh.b = { x: pt.x, y: pt.y };
+        return;
+      case 'poly': case 'curve':
+        if (sh.pts && sh.pts[i]) sh.pts[i] = { x: pt.x, y: pt.y };
+        return;
+      case 'rect': case 'ellipse': {
+        /* A box has no vertex of its own to move — dragging a corner pins the
+           opposite one and resizes about it, which is what a corner handle
+           means everywhere else in the app. Measured along the shape's own
+           axes so a rotated box stays rotated. */
+        const rot = sh.rot || 0;
+        const anchor = shapeHandles(sh)[(i + 2) % 4];
+        if (!anchor) return;
+        const c = Math.cos(rot), sn = Math.sin(rot);
+        const dx = pt.x - anchor.x, dy = pt.y - anchor.y;
+        const lu = dx * c + dy * sn, lv = -dx * sn + dy * c;
+        const w = Math.abs(lu), h = Math.abs(lv);
+        const ccx = anchor.x + (lu / 2) * c - (lv / 2) * sn;
+        const ccy = anchor.y + (lu / 2) * sn + (lv / 2) * c;
+        if (sh.kind === 'rect') { sh.w = w; sh.h = h; sh.x = ccx - w / 2; sh.y = ccy - h / 2; }
+        else { sh.cx = ccx; sh.cy = ccy; sh.rx = w / 2; sh.ry = h / 2; }
+        return;
+      }
+    }
+  }
+
+  /** pen still down after a snap: reshape rather than keep drawing */
+  function dragSnapped(ev) {
+    const d = P.draw; if (!d || !d.snapped) return;
+    const L = E.layout[d.pageIndex]; if (!L) return;
+    const pt = local(ev), w = E.toWorld(pt.x, pt.y);
+    dragHandle(d.snapped, d.handle || 0, { x: w.x - L.x, y: w.y - L.y });
+    d.adjusted = true;
+    drawLive();
   }
 
   /* ── live ink ─────────────────────────────────────
@@ -774,6 +861,10 @@
       }
     }
 
+    /* An adjusted snap is the user's shape, not a guess — re-recognising the
+       raw points here would throw the adjustment away. */
+    if (d.snapped) { E.addItems(page, [shapeItem(d, d.snapped)], 'snap shape'); return; }
+
     if (d.tool === 'shape') {
       const forced = T.opts.shape.kind;
       let sh = forced === 'auto'
@@ -784,7 +875,6 @@
       return;
     }
 
-    if (d.snapped) { E.addItems(page, [shapeItem(d, d.snapped)], 'snap shape'); return; }
     T._lastInkAt = performance.now();
     E.addItems(page, [strokeItem(d, false)], 'ink');
   }
@@ -902,6 +992,21 @@
   /* ═══════════ lasso: circle it, then move it ═══════════ */
 
   function startLasso(ev, hit) {
+    /* Tapping straight onto something selects it, rather than making you draw
+       a loop around it first. That is what makes a text box directly movable
+       and resizable once it exists: tap it and drag to move, or take a corner
+       handle to resize. Drawing a loop still works for picking up several
+       things at once — this only short-circuits the single-item case. */
+    const grabbed = E.hitItemAt(hit.page, { x: hit.x, y: hit.y }, 8 / E.cam.zoom);
+    if (grabbed) {
+      E.selection = {
+        pageIndex: hit.index, page: hit.page, items: [grabbed],
+        poly: null, bbox: E.selectionBBox([grabbed]), moved: true
+      };
+      E.invalidate(); NW.emit('selection');
+      startMove(ev, hit);
+      return;
+    }
     P.mode = 'lasso';
     P.draw = { tool: 'lasso', pageIndex: hit.index, page: hit.page, pts: [{ x: hit.x, y: hit.y }] };
   }
