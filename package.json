@@ -1,7 +1,7 @@
 {
   "name": "notewell",
   "productName": "NoteWell",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Handwritten notes, PDFs and Claude \u2014 for university students. Works offline.",
   "main": "desktop/main.js",
   "author": "NoteWell",
