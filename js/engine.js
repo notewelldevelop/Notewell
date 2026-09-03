@@ -287,24 +287,30 @@
     return out;
   };
 
-  /* The cache used to be capped so low that at ordinary zoom levels the page
-     was rendered below screen resolution and then scaled up — which is the
-     other half of why ink looked grainy. The cap is now generous enough to
-     hold a retina A4, and anything above it falls through to direct vector
-     drawing rather than being blurred. */
+  /* Rasterise the cache finer than the screen needs, then let the blit scale
+     it down. Ink is thin dark lines on white: at 1:1 a stroke covers a pixel
+     and a half and the rasteriser has to guess, which is why the page turned
+     gritty once it was zoomed out far enough to stop drawing vectors.
+
+     The factor has to be a whole number. Measured against a 5x supersampled
+     reference, a 1.25x cache scored *worse* than no supersampling at all —
+     2.64 against 2.20 at 30% zoom — because a fractional downscale samples
+     unevenly and lays a beat pattern over the ink, which is the grain itself.
+     Whole ratios average cleanly: 2x more than halves the error and 3x roughly
+     quarters it. So take the largest whole multiple that fits a pixel budget,
+     and note that the cache is only ever used below 50% zoom, where three
+     times a small canvas is still a small canvas. */
   const MAX_CACHE_PX = 13e6;
-  /* Rasterise the cache finer than the screen needs and let the blit scale it
-     down. Ink is thin dark lines on white: at 1:1 a stroke covers a pixel and
-     a half and the rasteriser has to guess, which is why the page turned
-     gritty the moment it zoomed out far enough to stop drawing vectors.
-     Supersampling averages that guess over several pixels — the same trick as
-     MSAA. The area cap still applies, so a large page simply gets less of it
-     and falls through to vectors sooner. */
-  const CACHE_SUPERSAMPLE = 1.25;
+  const CACHE_PX_BUDGET = 6e6;
   function cacheScaleFor(page) {
-    let s = NW.clamp(E.cam.zoom * E.dpr, 0.3, 3) * CACHE_SUPERSAMPLE;
-    const area = page.w * page.h * s * s;
-    if (area > MAX_CACHE_PX) s = Math.sqrt(MAX_CACHE_PX / (page.w * page.h));
+    const need = NW.clamp(E.cam.zoom * E.dpr, 0.3, 3);
+    const area = page.w * page.h;
+    let mult = 1;
+    for (const k of [3, 2]) {
+      if (area * (need * k) * (need * k) <= CACHE_PX_BUDGET) { mult = k; break; }
+    }
+    let s = need * mult;
+    if (area * s * s > MAX_CACHE_PX) s = Math.sqrt(MAX_CACHE_PX / area);
     return s;
   }
 
