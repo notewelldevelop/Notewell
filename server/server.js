@@ -26,6 +26,7 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = path.resolve(__dirname, '..');
 const DATA = process.env.NOTEWELL_DATA || path.join(__dirname, 'data');
+const NO_CACHE = process.env.NOTEWELL_NO_CACHE === '1';
 const USERS = path.join(DATA, 'users.json');
 const LIBS = path.join(DATA, 'libraries');
 const MAX_BODY = 220 * 1024 * 1024;           // a big library of scans
@@ -94,7 +95,11 @@ function serveStatic(req, res, urlPath) {
     const ext = path.extname(file).toLowerCase();
     const headers = {
       'content-type': MIME[ext] || 'application/octet-stream',
-      'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
+      /* An hour is right for someone self-hosting this for a class. It is
+         exactly wrong while working on the source: you edit js/, reload, and
+         the browser hands you the copy it already had, so a change looks like
+         it did nothing. NOTEWELL_NO_CACHE=1 turns that off for development. */
+      'cache-control': (NO_CACHE || ext === '.html') ? 'no-cache' : 'public, max-age=3600',
       'content-length': st.size
     };
     if (rel.endsWith('sw.js')) headers['service-worker-allowed'] = '/';

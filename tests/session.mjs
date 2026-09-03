@@ -1049,6 +1049,43 @@ t('pen-only: losing pointer capture mid-stroke is caught', () => {
   eq(T._p.penId, null);
 });
 
+t('fast writing: a stale capture-loss cannot kill the stroke that replaced it', () => {
+  resetInput();
+  T.setTool('pen');
+  const page = E.pages[E.active];
+  const n = page.items.length;
+
+  /* Writing an H at speed. iPadOS recycles pointer ids, so every upright
+     arrives on the same one, and `releasePointerCapture` does not deliver its
+     `lostpointercapture` synchronously — the browser queues it. Write fast
+     enough and it lands *after* the next stroke has claimed that id. Before the
+     guard it matched the live stroke and ended it a moment after it began,
+     which is why the second upright of an H, and the whole of an I, kept
+     vanishing. The event carries the old stroke's timestamp, so it is
+     recognisable as stale. Nothing here is reachable synchronously, which is
+     why every earlier attempt at this bug missed it. */
+  const upright = (x, t0) => {
+    const a = scr(x, 1450), b = scr(x, 1550);
+    down(300, 'pen', a.x, a.y, { timeStamp: t0 });
+    move(300, 'pen', b.x, b.y, { timeStamp: t0 + 4 });
+    return { b, lift: t0 + 8 };
+  };
+
+  const first = upright(200, 1000);
+  up(300, 'pen', first.b.x, first.b.y, { timeStamp: first.lift });
+  eq(page.items.length, n + 1, 'first upright landed');
+
+  // the second upright starts before the first one's capture-loss is delivered
+  const second = upright(320, 1020);
+  stage.dispatch('lostpointercapture', ev('lostpointercapture', second.b.x, second.b.y,
+    { id: 300, pointerType: 'pen', timeStamp: first.lift }));
+  eq(T._p.penId, 300, 'the live stroke still owns the canvas');
+  eq(page.items.length, n + 1, 'and was not committed early');
+
+  up(300, 'pen', second.b.x, second.b.y, { timeStamp: 1040 });
+  eq(page.items.length, n + 2, 'second upright landed too');
+});
+
 t('pen-only: every coalesced sample is used, not just the last', () => {
   resetInput();
   const page = E.pages[E.active];
@@ -1707,6 +1744,38 @@ t('ink: sparse samples are splined, so curves are not faceted', () => {
   ok(dense.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)), 'no NaNs');
 });
 
+t('ink: irregular sample spacing does not kink the curve', () => {
+  /* A stylus never samples evenly — the faster the hand moves the wider the
+     gaps — and uniform Catmull-Rom overshoots on uneven spacing, leaving a
+     small kink at the input points themselves. That was the visible bumpiness
+     along a stroke at high zoom: most of the curve turning by under a degree
+     per step with isolated spikes of eight. Centripetal spacing (alpha = 0.5)
+     cannot cusp or self-intersect, and flattens those spikes. */
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const raw = [];
+  for (let t = 0; t < 1; t += 0.012 + rnd() * 0.055) {
+    raw.push({ x: 40 + t * 420 + (rnd() - .5) * .6,
+               y: 120 + Math.sin(t * 4.2) * 55 + (rnd() - .5) * .6,
+               p: 0.45 + 0.3 * Math.sin(t * 7) });
+  }
+  ok(raw.length > 15, 'a realistic number of samples (' + raw.length + ')');
+
+  const dense = E.densify(raw, 0, raw.length, 3.2, true);
+  let worst = 0;
+  for (let i = 1; i < dense.length - 1; i++) {
+    const a0 = Math.atan2(dense[i].y - dense[i - 1].y, dense[i].x - dense[i - 1].x);
+    const a1 = Math.atan2(dense[i + 1].y - dense[i].y, dense[i + 1].x - dense[i].x);
+    let d = a1 - a0;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    worst = Math.max(worst, Math.abs(d) * 180 / Math.PI);
+  }
+  // uniform parameterisation measured 7.85 deg on this exact trace
+  ok(worst < 4, 'no kink at the input points (worst turn ' + worst.toFixed(2) + ' deg)');
+  ok(dense.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)), 'no NaNs');
+});
+
 t('ink: densify carries pressure and tilt through the interpolation', () => {
   const raw = [{ x: 0, y: 0, p: .2, t: 1 }, { x: 80, y: 0, p: 1.0, t: 1.8 }];
   const dense = E.densify(raw, 0, raw.length, 10);
@@ -1821,6 +1890,155 @@ t('scribble: crossings are counted, not proximity', () => {
   const over = [];
   for (let i = 0; i < 8; i++) over.push({ x: 40 + i * 20, y: i % 2 ? 60 : 140 });
   ok(E.pathCrossings(over, line) >= 4, 'a scribble crosses repeatedly');
+});
+
+/* ══════════ 27a. text boxes move and resize directly ══════════ */
+
+t('text: a box can be picked up and moved without lassoing it first', () => {
+  resetInput();
+  const page = E.pages[E.active];
+  // placed straight into the page, clear of anything earlier tests drew
+  const box = {
+    id: NW.uid('i_'), type: 'text', x: 520, y: 720, w: 200, h: 40,
+    text: 'Movable', font: 'Georgia, serif', fontName: 'Georgia', size: 28,
+    color: '#16150f', bold: false, italic: false, underline: false,
+    align: 'left', highlight: '', lineHeight: 1.35
+  };
+  E.addItems(page, [box], 'text');
+  ok(E.hitItemAt(page, { x: box.x + 6, y: box.y + 10 }, 6) === box, 'it is the top item there');
+
+  const x0 = box.x, y0 = box.y, w0 = box.w, size0 = box.size;
+  T.setTool('lasso');
+  const inside = scr(box.x + 6, box.y + 10);
+  const to = scr(box.x + 106, box.y + 70);
+  down(430, 'pen', inside.x, inside.y);
+  ok(E.selection && E.selection.items[0] === box, 'tapping it selected it');
+  move(430, 'pen', to.x, to.y);
+  up(430, 'pen', to.x, to.y);
+
+  ok(Math.abs(box.x - (x0 + 100)) < 2, 'it moved with the pen in x (' + box.x + ')');
+  ok(Math.abs(box.y - (y0 + 60)) < 2, 'and in y (' + box.y + ')');
+  eq(box.w, w0, 'moving does not resize it');
+  eq(box.size, size0, 'nor restyle it');
+  T.clearSelection();
+  T.setTool('pen');
+});
+
+t('text: a corner handle resizes the box it is selected on', () => {
+  resetInput();
+  const page = E.pages[E.active];
+  const box = page.items.filter(i => i.type === 'text').pop();
+  ok(box, 'we have a text box to work with');
+  T.setTool('lasso');
+  const inside = scr(box.x + 6, box.y + box.size * 0.5);
+  down(431, 'pen', inside.x, inside.y);
+  up(431, 'pen', inside.x, inside.y);
+  ok(E.selection && E.selection.items[0] === box, 'selected by a plain tap');
+
+  const b = E.selection.bbox;
+  const w0 = b.x1 - b.x0;
+  const corner = scr(b.x1, b.y1);
+  const out = scr(b.x1 + 70, b.y1 + 40);
+  down(432, 'pen', corner.x, corner.y);
+  eq(T._p.mode, 'scale', 'grabbing a corner scales rather than moves');
+  move(432, 'pen', out.x, out.y);
+  up(432, 'pen', out.x, out.y);
+
+  const nb = E.selectionBBox([box]);
+  ok((nb.x1 - nb.x0) > w0 + 5, 'the box actually grew (' + (nb.x1 - nb.x0).toFixed(1) + ' vs ' + w0.toFixed(1) + ')');
+  T.clearSelection();
+  T.setTool('pen');
+});
+
+/* ══════════ 27b. hold to snap, then drag to adjust ══════════ */
+
+t('shape tool: holding snaps the stroke without lifting', () => {
+  resetInput();
+  T.setTool('shape');
+  T.opts.shape.kind = 'auto';
+  const path = [];
+  for (let i = 0; i <= 8; i++) path.push({ x: 200 + i * 25, y: 1400 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 400 - i * 12, y: 1400 + i * 14 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 304 - i * 13, y: 1512 - i * 14 });
+  const scr0 = pathOnPage(path);
+  down(410, 'pen', scr0[0].x, scr0[0].y);
+  for (let i = 1; i < scr0.length; i++) move(410, 'pen', scr0[i].x, scr0[i].y);
+
+  // hold: the nib stops moving, so the next report is below the sample
+  // threshold and lastMoveT stays where it was
+  T._p.draw.lastMoveT = performance.now() - 600;
+  move(410, 'pen', scr0[scr0.length - 1].x + 0.01, scr0[scr0.length - 1].y);
+
+  const d = T._p.draw;
+  ok(d && d.snapped, 'the stroke snapped while the pen was still down');
+  ok(d.snapped.kind !== 'curve', 'to a real shape, not a smoothed squiggle');
+  ok(T._shapeHandles(d.snapped).length >= 2, 'and it has handles to drag');
+  up(410, 'pen', scr0[scr0.length - 1].x, scr0[scr0.length - 1].y);
+  T.setTool('pen');
+});
+
+t('shape tool: dragging after the snap moves one handle and pins the rest', () => {
+  resetInput();
+  T.setTool('shape');
+  T.opts.shape.kind = 'auto';
+  const page = E.pages[E.active];
+  const n = page.items.length;
+  const path = [];
+  for (let i = 0; i <= 8; i++) path.push({ x: 200 + i * 25, y: 1400 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 400 - i * 12, y: 1400 + i * 14 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 304 - i * 13, y: 1512 - i * 14 });
+  const scr0 = pathOnPage(path);
+  down(411, 'pen', scr0[0].x, scr0[0].y);
+  for (let i = 1; i < scr0.length; i++) move(411, 'pen', scr0[i].x, scr0[i].y);
+  T._p.draw.lastMoveT = performance.now() - 600;
+  const tail = scr0[scr0.length - 1];
+  move(411, 'pen', tail.x + 0.01, tail.y);
+
+  const d = T._p.draw;
+  ok(d && d.snapped, 'snapped');
+  const before = T._shapeHandles(d.snapped).map(h => ({ x: h.x, y: h.y }));
+  const moved = d.handle || 0;
+
+  /* Drag well away from where the pen paused. The handle it grabbed follows;
+     every other one must be exactly where it was — that is the whole contract,
+     and it is what makes a triangle keep two corners and move the third. */
+  const target = scr(120, 1250);
+  move(411, 'pen', target.x, target.y);
+  const after = T._shapeHandles(d.snapped).map(h => ({ x: h.x, y: h.y }));
+
+  eq(after.length, before.length, 'the shape keeps its handle count');
+  ok(Math.hypot(after[moved].x - 120, after[moved].y - 1250) < 1.5,
+     'the grabbed handle followed the nib');
+  let others = 0;
+  for (let i = 0; i < before.length; i++) {
+    if (i === moved) continue;
+    if (Math.hypot(after[i].x - before[i].x, after[i].y - before[i].y) > 0.01) others++;
+  }
+  // a box resizes about its opposite corner, so its two side handles ride along
+  const allowed = (d.snapped.kind === 'rect' || d.snapped.kind === 'ellipse') ? 2 : 0;
+  ok(others <= allowed, 'the other handles stayed put (' + others + ' moved)');
+
+  up(411, 'pen', target.x, target.y);
+  eq(page.items.length, n + 1, 'one shape committed');
+  eq(page.items[page.items.length - 1].type, 'shape', 'as a shape');
+  T.setTool('pen');
+});
+
+t('shape snapping stays opt-in for the pen', () => {
+  resetInput();
+  T.setTool('pen');
+  T.settings.holdToSnap = false;
+  const path = [];
+  for (let i = 0; i <= 8; i++) path.push({ x: 200 + i * 25, y: 1600 });
+  for (let i = 1; i <= 8; i++) path.push({ x: 400 - i * 12, y: 1600 + i * 10 });
+  const scr0 = pathOnPage(path);
+  down(412, 'pen', scr0[0].x, scr0[0].y);
+  for (let i = 1; i < scr0.length; i++) move(412, 'pen', scr0[i].x, scr0[i].y);
+  T._p.draw.lastMoveT = performance.now() - 600;
+  const tail = scr0[scr0.length - 1];
+  move(412, 'pen', tail.x + 0.01, tail.y);
+  ok(!T._p.draw.snapped, 'writing is never second-guessed unless asked');
+  up(412, 'pen', tail.x, tail.y);
 });
 
 /* ══════════ 28. highlighter ══════════ */
