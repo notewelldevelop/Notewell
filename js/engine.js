@@ -271,8 +271,16 @@
      hold a retina A4, and anything above it falls through to direct vector
      drawing rather than being blurred. */
   const MAX_CACHE_PX = 13e6;
+  /* Rasterise the cache finer than the screen needs and let the blit scale it
+     down. Ink is thin dark lines on white: at 1:1 a stroke covers a pixel and
+     a half and the rasteriser has to guess, which is why the page turned
+     gritty the moment it zoomed out far enough to stop drawing vectors.
+     Supersampling averages that guess over several pixels — the same trick as
+     MSAA. The area cap still applies, so a large page simply gets less of it
+     and falls through to vectors sooner. */
+  const CACHE_SUPERSAMPLE = 1.7;
   function cacheScaleFor(page) {
-    let s = NW.clamp(E.cam.zoom * E.dpr, 0.3, 3);
+    let s = NW.clamp(E.cam.zoom * E.dpr, 0.3, 3) * CACHE_SUPERSAMPLE;
     const area = page.w * page.h * s * s;
     if (area > MAX_CACHE_PX) s = Math.sqrt(MAX_CACHE_PX / (page.w * page.h));
     return s;
@@ -549,28 +557,61 @@
     const pts = densify(raw, lo, hi, base, usePressure);
     const n = pts.length;
     if (!n) return;
-    const rad = i => widthAt(pts[i], base, usePressure) / 2;
+    /* The width profile, low-passed.
+       Stylus pressure is a noisy signal — consecutive reports differ by a few
+       percent for a perfectly steady hand — and an unfiltered radius turns
+       that noise into scalloping along both edges. Two box passes make a
+       triangular kernel: enough to settle the noise, not enough to flatten a
+       genuine taper. The centreline is left alone; densify already splined it. */
+    let rad = new Float64Array(n);
+    for (let i = 0; i < n; i++) rad[i] = widthAt(pts[i], base, usePressure) / 2;
+    if (n > 4) {
+      const W = 3;
+      let src = rad, dst = new Float64Array(n);
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < n; i++) {
+          let sum = 0, cnt = 0;
+          for (let k = -W; k <= W; k++) {
+            const j = i + k;
+            if (j < 0 || j >= n) continue;
+            sum += src[j]; cnt++;
+          }
+          dst[i] = sum / cnt;
+        }
+        const t = src; src = dst; dst = t;
+      }
+      rad = src;
+    }
 
     ctx.beginPath();
 
-    // the connecting quadrangles
+    // the tapered bands joining consecutive discs
     for (let i = 0; i < n - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy);
-      if (len < 1e-6) continue;                     // no width to span
-      const nx = -dy / len, ny = dx / len;
-      const ra = rad(i), rb = rad(i + 1);
-      ctx.moveTo(a.x + nx * ra, a.y + ny * ra);
-      ctx.lineTo(b.x + nx * rb, b.y + ny * rb);
-      ctx.lineTo(b.x - nx * rb, b.y - ny * rb);
-      ctx.lineTo(a.x - nx * ra, a.y - ny * ra);
+      const d = Math.hypot(dx, dy);
+      if (d < 1e-6) continue;                       // no width to span
+      const ra = rad[i], rb = rad[i + 1];
+      const dr = ra - rb;
+      if (d <= Math.abs(dr)) continue;              // one disc swallows the other
+      const ux = dx / d, uy = dy / d;               // along the centreline
+      const nx = -uy, ny = ux;                      // across it
+      /* sin is how far the tangent leans off the perpendicular as the nib
+         swells or tapers; cos is what remains of the across-the-line reach.
+         With ra === rb this collapses to the plain perpendicular offset. */
+      const sin = dr / d, cos = Math.sqrt(1 - sin * sin);
+      const ax = a.x + ra * sin * ux, ay = a.y + ra * sin * uy;
+      const bx = b.x + rb * sin * ux, by = b.y + rb * sin * uy;
+      ctx.moveTo(ax + ra * cos * nx, ay + ra * cos * ny);
+      ctx.lineTo(bx + rb * cos * nx, by + rb * cos * ny);
+      ctx.lineTo(bx - rb * cos * nx, by - rb * cos * ny);
+      ctx.lineTo(ax - ra * cos * nx, ay - ra * cos * ny);
       ctx.closePath();
     }
 
     // the pen tip at each sample — this is what rounds the joins and the ends
     for (let i = 0; i < n; i++) {
-      const r = rad(i);
+      const r = rad[i];
       ctx.moveTo(pts[i].x + r, pts[i].y);
       ctx.arc(pts[i].x, pts[i].y, r, 0, TAU, true);
     }

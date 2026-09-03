@@ -230,10 +230,18 @@ button { font: inherit; font-family: var(--serif); color: inherit; background: n
 .doc-title:focus { background: var(--sunken); }
 
 /* ══════════ Tool options row ══════════ */
+/* A tool's options have to be *visible*, not merely present. This row used to
+   be nowrap with a hidden scrollbar, so on a tablet the controls at the end —
+   Chisel/Round on the highlighter, which is the widest row in the app — sat
+   past the right edge with nothing on screen to suggest they were there at
+   all. Wrapping costs a few pixels of canvas on a narrow screen and nothing on
+   a wide one, and `.stage` is flex:1 with a ResizeObserver, so it hands the
+   space straight back. */
 .subbar {
-  display: flex; align-items: center; gap: 14px; min-height: var(--sub); padding: 0 14px;
+  display: flex; align-items: center; gap: 8px 14px; min-height: var(--sub);
+  padding: 5px 14px;
   background: var(--bg); border-bottom: 1px solid var(--line);
-  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; flex-wrap: nowrap;
+  overflow-y: hidden; scrollbar-width: none; flex-wrap: wrap;
 }
 .subbar::-webkit-scrollbar { display: none; }
 .subbar .grp { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
@@ -338,7 +346,7 @@ button { font: inherit; font-family: var(--serif); color: inherit; background: n
 
 /* ══════════ Side panels ══════════ */
 .pages, .ai {
-  position: absolute; top: calc(var(--bar) + var(--sub) + env(safe-area-inset-top)); bottom: 0;
+  position: absolute; top: calc(var(--bar) + var(--sub-h, var(--sub)) + env(safe-area-inset-top)); bottom: 0;
   background: var(--surface); display: flex; flex-direction: column; z-index: 30; box-shadow: var(--shadow);
 }
 .pages { left: 0; width: 194px; border-right: 1px solid var(--line); }

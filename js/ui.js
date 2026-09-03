@@ -393,7 +393,30 @@
         bar.append(el('button', { class: 'chip', text: '100%', onclick: () => E.setZoom(1) }));
         break;
     }
+    publishSubbarHeight();
   };
+
+  /* The side panels are absolutely positioned and used to start at a fixed
+     --bar + --sub from the top. The options row can now wrap onto a second
+     line when a tool has more options than fit across — the highlighter is the
+     one that does — so that constant is no longer its real height, and the
+     panels would sit over the controls beside them. Publish what the row
+     actually measures and let the CSS use it. */
+  let subbarRO = null;
+  function publishSubbarHeight() {
+    const bar = $('#subbar'), screen = $('#editor');
+    if (!bar || !screen || !screen.style || typeof screen.style.setProperty !== 'function') return;
+    const apply = () => {
+      const h = bar.offsetHeight;
+      if (h) screen.style.setProperty('--sub-h', h + 'px');
+    };
+    if (!subbarRO && typeof ResizeObserver !== 'undefined') {
+      // rotation and window resizes change how much fits, so watch it too
+      subbarRO = new ResizeObserver(apply);
+      subbarRO.observe(bar);
+    }
+    apply();
+  }
 
   async function clearPage() {
     const page = E.pages[E.active]; if (!page || !page.items.length) return;

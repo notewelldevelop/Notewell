@@ -35,16 +35,27 @@ def build_subpaths(pts, base):
     for i in range(n - 1):
         a, b = pts[i], pts[i + 1]
         dx, dy = b["x"] - a["x"], b["y"] - a["y"]
-        ln = math.hypot(dx, dy)
-        if ln < 1e-6:
+        d = math.hypot(dx, dy)
+        if d < 1e-6:
             continue
-        nx, ny = -dy / ln, dx / ln
         ra, rb = rad(i), rad(i + 1)
+        dr = ra - rb
+        if d <= abs(dr):
+            continue                      # one disc swallows the other
+        ux, uy = dx / d, dy / d
+        nx, ny = -uy, ux
+        # external tangent, not a perpendicular offset: the band has to leave
+        # each disc travelling in the disc's own direction or it leaves a
+        # corner at every sample
+        sin = dr / d
+        cos = math.sqrt(1.0 - sin * sin)
+        ax, ay = a["x"] + ra * sin * ux, a["y"] + ra * sin * uy
+        bx, by = b["x"] + rb * sin * ux, b["y"] + rb * sin * uy
         subs.append([
-            (a["x"] + nx * ra, a["y"] + ny * ra),
-            (b["x"] + nx * rb, b["y"] + ny * rb),
-            (b["x"] - nx * rb, b["y"] - ny * rb),
-            (a["x"] - nx * ra, a["y"] - ny * ra),
+            (ax + ra * cos * nx, ay + ra * cos * ny),
+            (bx + rb * cos * nx, by + rb * cos * ny),
+            (bx - rb * cos * nx, by - rb * cos * ny),
+            (ax - ra * cos * nx, ay - ra * cos * ny),
         ])
 
     # discs, traversed anticlockwise=true  ->  decreasing angle
