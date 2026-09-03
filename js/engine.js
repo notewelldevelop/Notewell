@@ -20,7 +20,11 @@
     selection: null,          // {ids:Set, poly:[], bbox:{}, moving:bool}
     caches: new Map(),
     imgCache: new Map(),
-    needsRender: false
+    needsRender: false,
+    /* device pixels per page unit for whatever is being painted right now —
+       the screen, an offscreen cache, or an export. widthAt needs it to know
+       how thin is too thin. */
+    renderScale: 1
   };
 
   /* ── setup ────────────────────────────────────── */
@@ -223,6 +227,24 @@
     return covered / pts.length;
   };
 
+  /**
+   * What fraction of a path's own samples land inside an item.
+   *
+   * itemCoverage asks the opposite question — how much of the item sits inside
+   * the path's bounding box — and for a box-shaped item (typed text, an image,
+   * a fill) that is the wrong way round. Scribbling across the middle of a
+   * paragraph encloses none of its corners, so the paragraph survived while the
+   * highlighter over it was removed. This asks whether the pen actually
+   * travelled across the thing.
+   */
+  E.pathInsideItem = function (path, it) {
+    if (!path || !path.length) return 0;
+    const bb = E.itemBBox(it);
+    let inside = 0;
+    for (const p of path) if (G.rectHas(bb, p)) inside++;
+    return inside / path.length;
+  };
+
   E.itemInLasso = function (poly, polyBB, it, mode) {
     const bb = E.itemBBox(it);
     if (!G.rectsOverlap(bb, polyBB)) return false;
@@ -278,7 +300,7 @@
      Supersampling averages that guess over several pixels — the same trick as
      MSAA. The area cap still applies, so a large page simply gets less of it
      and falls through to vectors sooner. */
-  const CACHE_SUPERSAMPLE = 1.7;
+  const CACHE_SUPERSAMPLE = 1.25;
   function cacheScaleFor(page) {
     let s = NW.clamp(E.cam.zoom * E.dpr, 0.3, 3) * CACHE_SUPERSAMPLE;
     const area = page.w * page.h * s * s;
@@ -308,6 +330,7 @@
     cv.height = Math.max(1, Math.round(page.h * want));
     const cx = cv.getContext('2d');
     cx.setTransform(want, 0, 0, want, 0, 0);
+    E.renderScale = want;
     E.paintPage(cx, page, null);
     c = { canvas: cv, scale: want, rev: page.rev };
     E.caches.set(page.id, c);
@@ -352,6 +375,7 @@
       ctx.beginPath(); ctx.rect(s.x, s.y, w, h); ctx.clip();
       if (direct) {
         ctx.translate(s.x, s.y); ctx.scale(E.cam.zoom, E.cam.zoom);
+        E.renderScale = E.cam.zoom * E.dpr;
         E.paintPage(ctx, page, E.visibleRectIn(i));
       } else {
         const c = getCache(page);
@@ -480,10 +504,19 @@
       `usePressure === false` holds the pressure term at its nominal 1, so a
       tilt-only stroke is exactly the width the size slider promises and varies
       with the lean of the nib alone. */
+  /* A stroke thinner than about one device pixel cannot be laid down solidly:
+     the rasteriser spreads it over two pixels at partial coverage and the line
+     turns patchy and grey. That is the whole of why ink held up zoomed in and
+     fell apart zoomed out — at 30% a 3pt nib is well under a pixel. Every
+     vector renderer answers this the same way, with a floor measured in device
+     pixels rather than document units. Supersampling the cache only softened
+     the symptom and cost three times the fill rate. */
+  const MIN_DEVICE_PX = 0.85;
   function widthAt(p, base, usePressure) {
     const press = usePressure === false ? 1 : 0.35 + 0.85 * (p.p == null ? .5 : p.p);
     const tilt = p.t == null ? 1 : p.t;
-    return Math.max(0.4, base * press * tilt);
+    const floor = Math.max(0.4, MIN_DEVICE_PX / (E.renderScale || 1));
+    return Math.max(floor, base * press * tilt);
   }
 
   const TAU = Math.PI * 2;
@@ -566,17 +599,16 @@
     let rad = new Float64Array(n);
     for (let i = 0; i < n; i++) rad[i] = widthAt(pts[i], base, usePressure) / 2;
     if (n > 4) {
+      // prefix sums keep each pass O(n); the naive window was O(n·W) and this
+      // runs for every stroke on every repaint
       const W = 3;
+      const pre = new Float64Array(n + 1);
       let src = rad, dst = new Float64Array(n);
       for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + src[i];
         for (let i = 0; i < n; i++) {
-          let sum = 0, cnt = 0;
-          for (let k = -W; k <= W; k++) {
-            const j = i + k;
-            if (j < 0 || j >= n) continue;
-            sum += src[j]; cnt++;
-          }
-          dst[i] = sum / cnt;
+          const a = i - W < 0 ? 0 : i - W, b = i + W > n - 1 ? n - 1 : i + W;
+          dst[i] = (pre[b + 1] - pre[a]) / (b - a + 1);
         }
         const t = src; src = dst; dst = t;
       }
@@ -909,6 +941,7 @@
       const img = E.imgCache.get(page.pdfImage);
       if (img) ctx.drawImage(img, 0, 0, page.w, page.h);
     }
+    E.renderScale = scale;
     for (const it of page.items) E.drawItem(ctx, it, page);
     return c;
   };

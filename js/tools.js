@@ -436,6 +436,16 @@
   /** Last line of defence: capture lost for any reason while still drawing. */
   function onLostCapture(ev) {
     if (P.penId == null || ev.pointerId !== P.penId) return;
+    /* The one stale-lift path that was still open, and the reason a quickly
+       written H lost its second upright.
+       `releasePointerCapture` does not fire `lostpointercapture` synchronously
+       — the browser queues it. iPadOS also recycles pointer ids, so the next
+       stroke is usually handed the same id. Write fast enough and the order
+       becomes: stroke A lifts, we release, stroke B goes down and claims the
+       same id, and only then does A's queued loss arrive. Without this guard it
+       matches B's id, finds a live stroke, and ends B a millisecond after it
+       started. The event carries A's timestamp, so it is recognisable. */
+    if (staleLift(ev)) return;
     if (!P.mode) { releaseDraw(); return; }
     const rec = P.pointers.get(ev.pointerId);
     P.pointers.delete(ev.pointerId);
@@ -626,6 +636,7 @@
     lctx.rect(s.x, s.y, L.w * E.cam.zoom, L.h * E.cam.zoom);
     lctx.clip();
     lctx.translate(s.x, s.y); lctx.scale(E.cam.zoom, E.cam.zoom);
+    E.renderScale = E.cam.zoom * E.dpr;   // live ink obeys the same width floor
     return L;
   }
 
@@ -832,8 +843,11 @@
     return page.items.filter(it => {
       if (!passesFilter(it)) return false;
       if (it.type === 'image' || it.type === 'text' || it.type === 'fill') {
-        // no outline to cross, so ask whether the scribble covered it
-        return E.itemCoverage(box, it) > 0.6;
+        /* Either the scribble swallowed it, or the scribble ran across it.
+           Only the first was checked, so a word scribbled through the middle
+           kept its typed text and lost only the highlighter sitting on it. */
+        if (E.itemCoverage(box, it) > 0.6) return true;
+        return E.pathInsideItem(path, it) >= 0.25;
       }
       // crossed back and forth, or run over along its length
       if (E.pathCrossings(path, it, 2) >= 2) return true;
@@ -1081,7 +1095,12 @@
     await new Promise(r => setTimeout(r, 0));
 
     const scale = NW.clamp(1400 / Math.max(page.w, page.h), 0.5, 1);
-    const src = E.renderPageTo(page, scale);
+    /* Boundaries come from what you drew, not from the paper. Rendering the
+       template too meant every rule and every dot of a grid was a colour
+       mismatch the flood could not cross, so a shape drawn on lined paper
+       filled in stripes and one on dotted paper came out pocked. Ink still
+       stops the fill; the ruling no longer does. */
+    const src = E.renderPageTo(page, scale, { background: false });
     const w = src.width, h = src.height;
     const ctx = src.getContext('2d', { willReadFrequently: true });
     const img = ctx.getImageData(0, 0, w, h);
@@ -1157,11 +1176,36 @@
     };
     await new Promise(res => { E.warmImage(item.data, page.id); NW.loadImage(item.data).then(i2 => { E.imgCache.set(item.data, i2); res(); }).catch(res); });
 
-    /* fills sit under the ink so your writing is never buried */
+    /* Fills sit under the ink so your writing is never buried — but they must
+       still stack above *each other*, or filling an already-filled region drops
+       the new colour underneath the old one and nothing appears to happen.
+       Land above the run of existing fills and below everything else, and drop
+       any earlier fill this one completely repaints so they cannot pile up. */
+    let at = 0;
+    while (at < page.items.length && page.items[at].type === 'fill') at++;
+    const nb2 = { x0: item.x, y0: item.y, x1: item.x + item.w, y1: item.y + item.h };
+    const buried = page.items.slice(0, at).filter(f => {
+      const b = E.itemBBox(f);
+      return b.x0 >= nb2.x0 - 0.5 && b.y0 >= nb2.y0 - 0.5 && b.x1 <= nb2.x1 + 0.5 && b.y1 <= nb2.y1 + 0.5;
+    });
+    const where = buried.map(f => ({ f, i: page.items.indexOf(f) })).sort((a2, b3) => a2.i - b3.i);
     E.History.do({
       label: 'fill',
-      redo() { page.items.unshift(item); E.commitPage(page); },
-      undo() { const i = page.items.indexOf(item); if (i >= 0) page.items.splice(i, 1); E.commitPage(page); }
+      redo() {
+        for (let k = where.length - 1; k >= 0; k--) {
+          const i = page.items.indexOf(where[k].f);
+          if (i >= 0) page.items.splice(i, 1);
+        }
+        let a2 = 0;
+        while (a2 < page.items.length && page.items[a2].type === 'fill') a2++;
+        page.items.splice(a2, 0, item);
+        E.commitPage(page);
+      },
+      undo() {
+        const i = page.items.indexOf(item); if (i >= 0) page.items.splice(i, 1);
+        for (const r of where) page.items.splice(Math.min(r.i, page.items.length), 0, r.f);
+        E.commitPage(page);
+      }
     });
   }
   T.doFill = doFill;

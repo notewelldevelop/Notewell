@@ -621,7 +621,9 @@
       const p = E.pages[i];
       const d = el('div', { class: 'thumb' + (i === E.active ? ' on' : ''), onclick: () => { E.scrollTo(i); E.active = i; UI.markActiveThumb(); } });
       await E.preloadPage(p);
-      const c = E.renderPageTo(p, 150 / Math.max(p.w, p.h));
+      // Raster at device resolution and let CSS size it back down; at 1x the
+      // browser was stretching a 150px bitmap across a wider slot.
+      const c = E.renderPageTo(p, (150 * NW.dpr()) / Math.max(p.w, p.h));
       c.style.width = '100%';
       d.appendChild(c);
       d.appendChild(el('span', { class: 'n', text: i + 1 }));
@@ -798,17 +800,16 @@
         const p = await NW.Lib.page(nb.pageIds[0]);
         if (!p) return;
         await E.preloadPage(p);
-        const c = E.renderPageTo(p, 260 / Math.max(p.w, p.h));
+        // Same again, and this one is the more visible of the two: a cover is
+        // drawn into a card far wider than 260 CSS pixels.
+        const c = E.renderPageTo(p, (260 * NW.dpr()) / Math.max(p.w, p.h));
         c.style.width = '100%'; c.style.height = '100%'; c.style.objectFit = 'cover';
         art.insertBefore(c, art.firstChild);
       })();
     }
 
     $('#libEmpty').hidden = !!(folders.length || books.length);
-    const total = NW.Lib.notebooks.length;
-    const est = await NW.Store.estimate();
-    $('#libStat').textContent = total + (total === 1 ? ' notebook' : ' notebooks') +
-      (est && est.usage ? ' · ' + NW.bytes(est.usage) + ' stored on this device' : '');
+
   }, 40);
 
   function folderMenu(ev, f) {

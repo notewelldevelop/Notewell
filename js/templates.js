@@ -93,7 +93,7 @@
     dotted: {
       name: 'Dotted',
       draw(ctx, w, h, o) {
-        const g = w / 26, r = Math.max(1.2, w / 700);
+        const g = w / 26, r = Math.max(0.55, w / 1550);
         ctx.fillStyle = o.ink;
         for (let x = g; x < w; x += g)
           for (let y = g; y < h; y += g) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.284); ctx.fill(); }
@@ -103,7 +103,7 @@
     dottedWide: {
       name: 'Dotted wide',
       draw(ctx, w, h, o) {
-        const g = w / 16, r = Math.max(1.4, w / 620);
+        const g = w / 16, r = Math.max(0.6, w / 1400);
         ctx.fillStyle = o.ink;
         for (let x = g; x < w; x += g)
           for (let y = g; y < h; y += g) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.284); ctx.fill(); }
