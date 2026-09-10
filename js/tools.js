@@ -79,12 +79,81 @@
     stage.addEventListener('wheel', onWheel, { passive: false });
     stage.addEventListener('contextmenu', e => e.preventDefault());
 
+    /* touch-action:none stops Safari scrolling and zooming, but iPadOS runs
+       other touch interpreters as well (double-tap, text interaction, the
+       loupe) that still look at quick successive Pencil contacts. Cancelling
+       the touch itself is how a page tells WebKit it owns every contact
+       outright. Pointer events still fire. Canvas targets only: text boxes in
+       the overlay need their taps. */
+    const ownTouch = e => {
+      const t = e.target;
+      if (e.cancelable && t && (t === stage || t.tagName === 'CANVAS')) e.preventDefault();
+    };
+    stage.addEventListener('touchstart', ownTouch, { passive: false });
+    stage.addEventListener('touchmove', ownTouch, { passive: false });
+    stage.addEventListener('touchend', ownTouch, { passive: false });
+
+    startTrace();
+
     /* native wrapper (iPadOS/Android shell) forwards the real hardware gesture */
     window.addEventListener('pencildoubletap', () => T.pencilToggle('hardware'));
     window.addEventListener('pencilsqueeze', () => NW.emit('ui:quickpalette'));
 
     T.loadOpts();
   };
+
+  /* ── event trace ──────────────────────────────────
+     Off unless the page is opened with ?trace in the address. Records what the
+     stage is sent and what was done with it, so a stroke that goes missing on a
+     real iPad arrives here as the event stream that lost it. Moves are counted,
+     not listed, to keep it short enough to paste. Nothing leaves the device:
+     the button copies it to the clipboard. */
+  const TR = { on: false, t0: 0, log: [], moves: 0, btn: null };
+  T._trace = TR;
+  function trace(kind, ev, extra) {
+    if (!TR.on) return;
+    if (kind === 'pointermove') { TR.moves++; return; }
+    const r = { k: kind, t: +(performance.now() - TR.t0).toFixed(1) };
+    if (TR.moves) { r.mv = TR.moves; TR.moves = 0; }
+    if (ev) {
+      const c = ev.changedTouches && ev.changedTouches[0];
+      r.id = ev.pointerId != null ? ev.pointerId : (c ? 't' + c.identifier : undefined);
+      r.pt = ev.pointerType || (c && c.touchType) || undefined;
+      r.ts = typeof ev.timeStamp === 'number' ? +(ev.timeStamp - TR.t0).toFixed(1) : null;
+      const px = c || ev;
+      if (px.clientX != null) { r.x = Math.round(px.clientX); r.y = Math.round(px.clientY); }
+      if (ev.cancelable === false) r.nc = 1;
+    }
+    r.pen = P.penId; r.m = P.mode; if (P.owed) r.o = P.owed;
+    if (extra) Object.assign(r, extra);
+    if (TR.log.length >= 3000) TR.log.shift();
+    TR.log.push(r);
+    if (TR.btn) TR.btn.textContent = 'Copy trace (' + TR.log.length + ')';
+  }
+  function startTrace() {
+    if (!/[?&]trace\b/.test((window.location && location.search) || '')) return;
+    TR.on = true; TR.t0 = performance.now();
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerleave',
+                        'gotpointercapture', 'lostpointercapture', 'touchstart', 'touchend', 'touchcancel']) {
+      stage.addEventListener(type, e => trace(type, e), { capture: true, passive: true });
+    }
+    const b = TR.btn = document.createElement('button');
+    b.textContent = 'Copy trace (0)';
+    b.style.cssText = 'position:fixed;left:10px;bottom:10px;z-index:99;padding:9px 13px;' +
+      'font:13px system-ui;background:#16150f;color:#fff;border:0;border-radius:7px';
+    b.onclick = async () => {
+      const text = JSON.stringify({ ua: navigator.userAgent, build: (window.NW_BUILD || {}).version, log: TR.log });
+      try { await navigator.clipboard.writeText(text); b.textContent = 'Copied ' + TR.log.length + ' events'; }
+      catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;inset:10%;z-index:100;font:11px monospace';
+        ta.onblur = () => ta.remove();
+        document.body.appendChild(ta); ta.focus(); ta.select();
+      }
+    };
+    document.body.appendChild(b);
+  }
 
   /* Bump this when a default changes in a way that must reach people who have
      already used the app. Saved settings normally win — which is right — but
@@ -287,12 +356,12 @@
   }
 
   function straggler(ev) {
-    if (staleLift(ev)) { if (P.owed) P.owed--; return true; }
+    if (staleLift(ev)) { if (P.owed) P.owed--; trace('ignored', ev, { why: 'clock' }); return true; }
     /* No usable clock. A pointer cannot teleport: an event that lands well
        away from where the live stroke actually is belongs to the press before
        it. The lift of a stroke that is genuinely ending arrives where the nib
        already is, so this cannot swallow one. */
-    if (P.owed && farFromLiveStroke(ev)) { P.owed--; return true; }
+    if (P.owed && farFromLiveStroke(ev)) { P.owed--; trace('ignored', ev, { why: 'place' }); return true; }
     return false;
   }
 
@@ -339,7 +408,7 @@
        have discarded the whole of the next stroke. `pointerdown` fires once per
        press, so there is no such thing as a repeat to protect against; and a
        stroke with nothing drawn in it yet commits nothing anyway. */
-    if (P.penId != null) { P.owed = Math.min(P.owed + 1, 2); recoverStalePointer(); }
+    if (P.penId != null) { trace('takeover', ev); P.owed = Math.min(P.owed + 1, 2); recoverStalePointer(); }
     cancelGesture();                                        // pen beats fingers
     claimDraw(ev);
 
@@ -923,6 +992,11 @@
     }
 
     T._lastInkAt = performance.now();
+    if (TR.on) {
+      let lo = Infinity, hi = -Infinity, l = Infinity, r = -Infinity;
+      for (const q of d.pts) { lo = Math.min(lo, q.y); hi = Math.max(hi, q.y); l = Math.min(l, q.x); r = Math.max(r, q.x); }
+      trace('commit', null, { pts: d.pts.length, w: Math.round(r - l), h: Math.round(hi - lo) });
+    }
     E.addItems(page, [strokeItem(d, false)], 'ink');
   }
 
