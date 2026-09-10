@@ -1049,6 +1049,19 @@ t('pen-only: losing pointer capture mid-stroke is caught', () => {
   eq(T._p.penId, null);
 });
 
+t('touch on the canvas is owned by the page, touch on a text box is not', () => {
+  const mk = target => ({ type: 'touchstart', target, cancelable: true, defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; } });
+  const onCanvas = mk(registry['#paper']);
+  stage.dispatch('touchstart', onCanvas);
+  ok(onCanvas.defaultPrevented, 'iPadOS gesture interpreters are kept off the canvas');
+
+  const box = mkEl('div'); box.tagName = 'DIV';
+  const onBox = mk(box);
+  stage.dispatch('touchstart', onBox);
+  ok(!onBox.defaultPrevented, 'a tap can still reach a text box');
+});
+
 t('fast writing: a straggler cannot truncate the stroke that replaced it', () => {
   /* The failure this catches is not a lost stroke — it is a *stub*. When the
      previous press's lift lands on the stroke that replaced it, that stroke is
